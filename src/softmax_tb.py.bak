@@ -1,0 +1,145 @@
+import random, os
+
+from src.softmax import *
+
+def testbench(vhdl_output_path=None):
+    """
+    fractionSize: number of bits after the point
+    """
+    # signals
+    # softmax = Signal(intbv(0)[32:])
+    # vector = Signal(intbv(0, min=0, max=2**32))
+
+
+    in_lista = [Signal(intbv(0)[b:]) for i in range(N)]
+    in_vector = ConcatSignal(*reversed(in_lista))
+
+    out_vector = Signal(intbv(0)[N * b:])
+    out_lista = [0 for i in range(N)]
+    for i in range(N):
+        out_lista[i] = out_vector((i+1)*b-1, i*b) # slicing tuple
+
+    done = Signal(False)
+    start = Signal(False)
+    clock = Signal(bool(0))
+    reset = Signal(True)
+
+    # clock generator
+    @always(delay(10))
+    def clockgen():
+        clock.next = not clock
+
+    # test vector setup
+    testVector = []
+    testVector.extend(random.randint(0, 10) for i in range(N))
+    in_lista = [Signal(intbv(testVector[i])[b:]) for i in range(N)]
+
+    out = softmax2(testVector, N)
+
+    # actual test
+    @instance
+    def check():
+        yield clock.negedge
+        reset.next = False
+        in_vector.next = ConcatSignal(*reversed(in_lista))
+        yield clock.negedge
+        start.next = True
+        yield clock.negedge
+        start.next = False
+
+        while True:
+            yield clock.negedge
+            if done == 1:
+                break
+        print(abs(out_vector - out))
+
+        for i in range(5):
+            yield clock.negedge
+        raise StopSimulation
+
+#############################################################
+    # under test
+    uut = Top(out_vector, done, in_vector, start, clock, reset)
+
+    if vhdl_output_path is not None:
+        print(1)
+        #uut.convert(hdl='VHDL', path=vhdl_output_path)
+
+    return instances()
+
+
+def softmax2(v, N):
+    ret = [0 for i in range(N)]
+    suma = 0
+    for i in range(N):
+        ret[i] = math.exp( v[i] )
+        suma += ret[i]
+    return [(i / suma) for i in ret]
+
+if __name__ == '__main__':
+    trace_save_path = './out/testbench/'
+    vhdl_output_path = './out/vhdl/'
+    os.makedirs(os.path.dirname(trace_save_path), exist_ok=True)
+    os.makedirs(os.path.dirname(vhdl_output_path), exist_ok=True)
+
+    tb = testbench(vhdl_output_path)
+    tb.config_sim(trace=True, directory=trace_save_path, name='softmax_tb')
+    tb.run_sim(100)
+
+########## OLD ##########
+# # N - liczna elementow wektora, generalnie N=len(vector)
+# N = 8
+# # słowo 8-bitowe
+# b = 8
+#
+# @block
+# def testbench(vhdl_output_path=None):
+#
+#     # U2 signed
+#     _min = -2**b
+#     _max = 2**b-1
+#
+#     #vector = Signal(intbv(0, min=_min, max=_max))
+#     #out = Signal(intbv(0, min=_min, max=_max))
+#
+#     clk = Signal(bool(0))
+#     reset = ResetSignal(0, active=0, async=True)
+#     vector = Axis(8)
+#     out = Axis(8)
+#
+#     top_1 = Top(clk, reset, vector, out)
+#
+#     period = 10
+#     low_time = int(period / 2)
+#     high_time = period - low_time
+#
+#     @instance
+#     def drive_clk():
+#         while True:
+#             yield delay(low_time)
+#             clk.next = 1
+#             yield delay(high_time)
+#             clk.next = 0
+#
+#     # @instance
+#     # def stimulus():
+#     #
+#     #     raise StopSimulation()
+#
+#     uut = Top(clk, reset, vector, out)
+#
+#     if vhdl_output_path is not None:
+#         uut.convert(hdl='VHDL', path=vhdl_output_path)
+#
+#     return instances()
+#
+#
+# if __name__ == '__main__':
+#     trace_save_path = './out/testbench/'
+#     vhdl_output_path = './out/vhdl/'
+#     os.makedirs(os.path.dirname(trace_save_path), exist_ok=True)
+#     os.makedirs(os.path.dirname(vhdl_output_path), exist_ok=True)
+#
+#     tb = testbench(vhdl_output_path)
+#     tb.config_sim(trace=True, directory=trace_save_path, name='softmax_tb')
+#     tb.run_sim(100)
