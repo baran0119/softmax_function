@@ -4,9 +4,13 @@ from src.axis import Axis
 from src.clk_gen import clk_gen
 
 
-def bin2float(b):
-    s, f = b.find('.')+1, int(b.replace('.', ''), 2)
-    return f/2.**(len(b)-s) if s else f
+# tuple with factorial
+fact = [math.factorial(i) for i in range(20)]
+
+
+# def bin2float(b):
+#     s, f = b.find('.')+1, int(b.replace('.', ''), 2)
+#     return f/2.**(len(b)-s) if s else f
 
 
 @block
@@ -74,15 +78,14 @@ def myexp(clk, reset, exp_x, x, done, enable, M, f):
         outputs: exp_x(32b), done(bool)
     """
 
-    # tuple with factorial
-    fact = tuple([math.factorial(i) for i in range(M+1)])
-
     state_t = enum('COUNT', 'DONE')
     state = Signal(state_t.COUNT)
 
     accumulator = Signal(intbv(0)[64:])
     counter = Signal(intbv(0)[32:])
-
+    fact_sig = [Signal(intbv(fact_val)[32:]) for fact_val in fact]
+    for i in range(len(fact_sig)):
+        fact_sig[i].driven = True
     x_n = Signal(intbv(0)[64:])
     done_power, enable_power = [Signal(bool(False)) for i in range(2)]
     power_instance = mypower(clk, reset, x_n, x, counter, done_power, enable_power)
@@ -106,7 +109,7 @@ def myexp(clk, reset, exp_x, x, done, enable, M, f):
                         enable_power.next = True  # turn on mypower block
                         if done_power:            # and wait for it
                             enable_power.next = False
-                            accumulator.next = accumulator + ((x_n // (fact[counter] << f)) << 16)
+                            accumulator.next = accumulator + ((x_n // (fact_sig[counter] << f)) << f)
                             counter.next = counter + 1
 
                 else:  # counter > M
@@ -115,7 +118,7 @@ def myexp(clk, reset, exp_x, x, done, enable, M, f):
 
         elif state == state_t.DONE:
             done.next = 1
-            exp_x.next = accumulator[48:16]  # output is 32-bits
+            exp_x.next = accumulator[3*f:f]  # output is 32-bits
             accumulator.next = 0
             state.next = state_t.COUNT
         else:
@@ -152,17 +155,20 @@ def softmax(clk, reset, out_vector, in_vector, n, done, enable, M=16, f=16):
     state_t = enum('COUNT', 'DONE')
     state = Signal(state_t.COUNT)
 
-    accumulator = Signal(intbv(0)[32:])
-    counter = Signal(intbv(0)[32:])
-    counter2 = Signal(intbv(0)[32:])
+    accumulator = Signal(intbv(0)[b:])
+    counter = Signal(intbv(0)[b:])
+    counter2 = Signal(intbv(0)[b:])
 
-    exp_list = [Signal(intbv(0)[32:]) for i in range(n)]
-    temp = [Signal(intbv(0)[64:]) for i in range(n)]
-    in_list = [Signal(intbv(0)[32:]) for i in range(n)]
-    out_list = [Signal(intbv(0)[32:]) for i in range(n)]
+    exp_list = [Signal(intbv(0)[b:]) for i in range(n)]
+    temp = [Signal(intbv(0)[2*b:]) for i in range(n)]
+    # temp_done = Signal(bool(False))
+
+    in_list = [Signal(intbv(0)[b:]) for i in range(n)]
+    out_list = [Signal(intbv(0)[b:]) for i in range(n)]
     done_exp = [Signal(bool(False)) for i in range(n)]
     enable_exp = [Signal(bool(False)) for i in range(n)]
     exp_instance = [None for i in range(n)]
+    out_vector_c = Signal(intbv()[len(out_vector):])
 
     for i in range(n):
         in_list[i] = in_vector((i+1)*b-1, i*b)  # slicing
@@ -183,83 +189,45 @@ def softmax(clk, reset, out_vector, in_vector, n, done, enable, M=16, f=16):
         if state == state_t.COUNT:
             if enable:
                 done.next = False
-                enable_exp[0].next = True
-                if counter <= n+1:
-                    if done_exp[0]:
-                        enable_exp[0].next = False
-                        accumulator.next = accumulator + exp_list[0]
-                        counter.next = counter + 1
-                        enable_exp[1].next = True
-                    if done_exp[1]:
-                        # print("exp_list[0]=", bin(exp_list[0][:16], 16), ".", bin(exp_list[0][16:], 16))
-                        print("exp_list[0]=", bin2float(str(bin(exp_list[0][:16], 16)) + "." + str(bin(exp_list[0][16:], 16))))
-                        # print("accumulator=", bin(accumulator, 32))
-                        enable_exp[1].next = False
-                        accumulator.next = accumulator + exp_list[1]
-                        counter.next = counter + 1
-                        enable_exp[2].next = True
-                    if done_exp[2]:
-                        # print("exp_list[1]=", bin(exp_list[1][:16], 16), ".", bin(exp_list[1][16:], 16))
-                        print("exp_list[1]=", bin2float(str(bin(exp_list[1][:16], 16)) + "." + str(bin(exp_list[1][16:], 16))))
-                        # print("accumulator=", bin(accumulator, 32))
-                        enable_exp[2].next = False
-                        accumulator.next = accumulator + exp_list[2]
+                if counter < n:
+                    enable_exp[counter].next = True
+                    if done_exp[counter]:
+                        enable_exp[counter].next = False
+                        accumulator.next = accumulator + exp_list[counter]
                         counter.next = counter + 1
                 else:
-                    # print("exp_list[2]=", bin(exp_list[2][:16], 16), ".", bin(exp_list[2][16:], 16))
-                    print("exp_list[2]=", bin2float(str(bin(exp_list[2][:16], 16)) + "." + str(bin(exp_list[2][16:], 16))))
-                    # print("accumulator=", bin(accumulator[:16], 16), ".", bin(accumulator[15:], 16))
-                    print("accumulator=", bin2float(str(bin(accumulator[:16], 16)) + "." + str(bin(accumulator[16:], 16))))
-
-                    temp[0].next = ((exp_list[0] << 16) // accumulator) << 16
-                    temp[1].next = ((exp_list[1] << 16) // accumulator) << 16
-                    temp[2].next = ((exp_list[2] << 16) // accumulator) << 16
-
-
-                # I can't use counter as index for lists - Error: list index out of range
-                # so i decided to do it manually like above
-                # if counter <= n:
-                #     enable_exp[int(counter)].next = True
-                #     if done_exp[int(counter)]:
-                #         enable_exp[int(counter)].next = False
-                #         accumulator.next = accumulator + exp_list[int(counter)]
-                #         counter.next = counter + 1
-                # else:  # counter > n
-                #     if counter2 <= n:
-                #         temp[int(counter2)].next = exp_list[int(counter2)] << f
-                #         temp[int(counter2)].next = (temp[int(counter2)] // accumulator) << f
-                #         out_list[int(counter2)].next = temp[48:16]
-                #         counter2.next = counter2 + 1
-                #     else:
-                #         counter2.next = 0
-
-                    state.next = state_t.DONE
                     counter.next = 0
-
+                    state.next = state_t.DONE
         elif state == state_t.DONE:
             done.next = True
-            print("done")
-            # print("temp[0]=", bin(temp[0], 64))
-            # print("temp[1]=", bin(temp[1], 64))
-            # print("temp[2]=", bin(temp[2], 64))
-            # print("exp_list[0]=", bin(exp_list[0], b))
-            # print("exp_list[1]=", bin(exp_list[1], b))
-            # print("exp_list[2]=", bin(exp_list[2], b))
-            print("temp[0]=", bin2float(str(bin(temp[0][:32], 32)) + "." + str(bin(temp[0][32:0], 32))))
-            print("temp[1]=", bin2float(str(bin(temp[1][:32], 32)) + "." + str(bin(temp[1][32:0], 32))))
-            print("temp[2]=", bin2float(str(bin(temp[2][:32], 32)) + "." + str(bin(temp[2][32:0], 32))))
-
-            out_list[0].next = temp[0][48:16]
-            out_list[1].next = temp[1][48:16]
-            out_list[2].next = temp[2][48:16]
-
-            # last step - for some reason, doesn't work
-            out_vector.next = ConcatSignal(*out_list)
-
-            accumulator.next = 0
-            state.next = state_t.COUNT
+            if counter < n:
+                temp[counter].next = ((exp_list[counter] << f) // accumulator) << f
+                counter.next = counter + 1
+            elif counter == n:
+                if counter2 < n:
+                    out_list[counter2].next = temp[counter2][3 * f:f]
+                    counter2.next = counter2 + 1
+                else:
+                    counter.next = counter + 1
+            else:
+                # print("temp[0]=", bin2float(str(bin(temp[0][:b], b)) + "." + str(bin(temp[0][b:], b))))
+                # print("temp[1]=", bin2float(str(bin(temp[1][:b], b)) + "." + str(bin(temp[1][b:], b))))
+                # print("temp[2]=", bin2float(str(bin(temp[2][:b], b)) + "." + str(bin(temp[2][b:0], b))))
+                # print("out_list[0]=", bin2float(str(bin(out_list[0][:f], f)) + "." + str(bin(out_list[0][f:], f))))
+                # print("out_list[1]=", bin2float(str(bin(out_list[1][:f], f)) + "." + str(bin(out_list[1][f:], f))))
+                # print("out_list[2]=", bin2float(str(bin(out_list[2][:f], f)) + "." + str(bin(out_list[2][f:], f))))
+                counter.next = 0
+                counter2.next = 0
+                accumulator.next = 0
+                state.next = state_t.COUNT
         else:
             raise ValueError("Undefined state")
+
+    out_vector_c = ConcatSignal(*out_list)
+
+    @always_seq(clk.posedge, reset=reset)
+    def map_out():
+        out_vector.next = out_vector_c
 
     return instances()
 
@@ -268,13 +236,12 @@ def softmax(clk, reset, out_vector, in_vector, n, done, enable, M=16, f=16):
 
 @block
 def test_softmax(vhdl_output_path=None):
-
-    # axis_y = Axis(32)
-    # axis_x = Axis(32)
-
     n = 3
     b = 32
     f = 16
+
+    # axis_y = Axis(n*b)
+    # axis_x = Axis(n*b)
 
     in_list = [Signal(intbv(1 << f)[b:]), Signal(intbv(2 << f)[b:]), Signal(intbv(3 << f)[b:])]
     in_vector = ConcatSignal(*reversed(in_list))
@@ -283,16 +250,31 @@ def test_softmax(vhdl_output_path=None):
 
     out_vector = Signal(intbv(0)[b*n:])
 
+    period = 10
     clk = Signal(bool(False))
     clk_gen_instance = clk_gen(clk, period=10)
+    low_time = int(period / 2)
+    high_time = period - low_time
+
     reset = ResetSignal(0, active=1, async=False)
 
     softmax_instance = softmax(clk, reset, out_vector, in_vector, n, done, enable, M=16, f=16)
+    # softmax_instance2 = softmax(clk, reset, axis_y, axis_x, n, done, enable, M=16, f=16)
+
+
+    # @instance
+    # def drive_clk():
+    #     while True:
+    #         yield delay(low_time)
+    #         clk.next = 1
+    #         yield delay(high_time)
+    #         clk.next = 0
+
 
     @instance
     def reset_gen():
         reset.next = 0
-        yield delay(7000)
+        yield delay(6001)
         yield clk.negedge
         reset.next = 1
 
@@ -300,12 +282,12 @@ def test_softmax(vhdl_output_path=None):
     @instance
     def stimulus():
         enable.next = True
-        yield delay(10000)
+        yield delay(6000)
         print(bin(out_vector, n * b))
         raise StopSimulation()
 
     if vhdl_output_path is not None:
-        softmax_instance.convert(hdl='VHDL', path=vhdl_output_path)
+        softmax_instance.convert(hdl='VHDL', path=vhdl_output_path, initial_values=True)
 
     return instances()
 
@@ -316,8 +298,8 @@ if __name__ == '__main__':
     os.makedirs(os.path.dirname(trace_save_path), exist_ok=True)
     os.makedirs(os.path.dirname(vhdl_output_path), exist_ok=True)
 
-    # tb = test_softmax(vhdl_output_path)
-    tb = test_softmax()
+    tb = test_softmax(vhdl_output_path)
+    # tb = test_softmax()
     tb.config_sim(trace=True, directory=trace_save_path, name='softmax_tb')
     tb.run_sim()
 
